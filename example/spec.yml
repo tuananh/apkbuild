@@ -1,0 +1,13 @@
+name: hello
+version: "1.0.0"
+epoch: "0"
+url: https://example.com/hello
+license: MIT
+description: Minimal CMake APK demo
+
+sources:
+  app:
+    context: {}
+
+build:
+  source_dir: hello  # project lives in hello/ relative to build context
