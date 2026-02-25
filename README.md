@@ -1,6 +1,4 @@
-# BuildKit demo (apkbuild)
-
-Go module: [github.com/tuananh/apkbuild](https://github.com/tuananh/apkbuild).
+# apkbuild
 
 This project is a **demonstration of how to use BuildKit** to build anything you want.
 
@@ -29,29 +27,7 @@ For this demo, **APK packaging uses `abuild`** internally (Alpine’s standard t
 docker build -t tuananh/apkbuild -f Dockerfile .
 ```
 
-## Run a build
-
-Use the frontend as the BuildKit syntax and point it at your spec and context:
-
-```bash
-cd example
-docker buildx build \
-  -f spec.yml \
-  --build-arg BUILDKIT_SYNTAX=tuananh/apkbuild \
-  --output type=local,dest=./out \
-  .
-```
-
-If the frontend image is in a registry, use that ref in `BUILDKIT_SYNTAX` (e.g. `ghcr.io/tuananh/apkbuild:latest`).
-
-The `example/` directory contains:
-
-- `spec.yml` — spec with name, version, epoch, url, license, and `source_dir: hello`
-- `hello/` — minimal CMake C++ project (`CMakeLists.txt`, `main.cpp`)
-
-After a successful build, `./out` contains the generated `.apk` file(s).
-
-## YAML spec format
+Our demo syntax would look like this
 
 ```yaml
 name: myapp
@@ -75,6 +51,28 @@ build:
   #   - "make -j$(nproc)"
   #   - "make install DESTDIR=/pkg"
 ```
+
+## Build the package
+
+Use the frontend as the BuildKit syntax and point it at your spec and context:
+
+```bash
+cd example
+docker buildx build \
+  -f spec.yml \
+  --build-arg BUILDKIT_SYNTAX=tuananh/apkbuild \
+  --output type=local,dest=./out \
+  .
+```
+
+`BUILDKIT_SYNTAX` is the frontend syntax you built eawrlier.
+
+The `example/` directory contains:
+
+- `spec.yml` — spec with name, version, epoch, url, license, and `source_dir: hello`
+- `hello/` — minimal CMake C++ project (`CMakeLists.txt`, `main.cpp`). For demonstration purpose, I don't want to implement `git clone`
+
+After a successful build, `./out` contains the generated `.apk` file(s).
 
 ## Layout
 
