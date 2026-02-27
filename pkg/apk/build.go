@@ -5,12 +5,27 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/tuananh/apkbuild/pkg/spec"
 	"github.com/moby/buildkit/client/llb"
 	"github.com/pkg/errors"
+	"github.com/tuananh/apkbuild/pkg/spec"
 )
 
 const alpineImage = "alpine:3.23"
+
+// buildInstallCommand returns a shell script that configures apk repos (if any) and installs packages from the spec.
+func buildInstallCommand(s *spec.Spec) string {
+	var b strings.Builder
+	b.WriteString("set -e\n")
+	for _, repo := range s.Environment.Contents.Repositories {
+		b.WriteString(fmt.Sprintf("echo %q >> /etc/apk/repositories\n", repo))
+	}
+	if len(s.Environment.Contents.Packages) > 0 {
+		b.WriteString("apk add --no-cache ")
+		b.WriteString(strings.Join(s.Environment.Contents.Packages, " "))
+		b.WriteString("\n")
+	}
+	return b.String()
+}
 
 // BuildAPK produces an llb.State that contains built .apk package(s).
 // It uses an Alpine-based environment: installs build deps, runs cmake, then abuild.
@@ -21,23 +36,25 @@ func BuildAPK(ctx context.Context, s *spec.Spec, sourceState llb.State, resolver
 	if s.Version == "" {
 		return llb.Scratch(), errors.New("spec version is required")
 	}
-
-	installDir := s.Build.InstallDir
-	if installDir == "" {
-		installDir = "/usr"
+	if s.Description == "" {
+		return llb.Scratch(), errors.New("spec description is required")
+	}
+	if s.URL == "" {
+		return llb.Scratch(), errors.New("spec url is required")
+	}
+	if s.License == "" {
+		return llb.Scratch(), errors.New("spec license is required")
 	}
 
-	// Worker: Alpine + build tools (alpine-sdk, cmake, make, g++)
+	// Worker: Alpine + environment packages from spec (repositories + packages)
 	workerImage := llb.Image(alpineImage, llb.WithCustomName("apk worker base"))
 	if resolver != nil {
 		workerImage = llb.Image(alpineImage, llb.WithMetaResolver(resolver), llb.WithCustomName("apk worker base"))
 	}
+	installCmd := buildInstallCommand(s)
 	worker := workerImage.
 		Run(
-			llb.Args([]string{
-				"sh", "-c",
-				"apk add --no-cache doas alpine-sdk cmake make g++",
-			}),
+			llb.Args([]string{"sh", "-c", installCmd}),
 			llb.WithCustomName("install build deps"),
 		).Root()
 
@@ -47,53 +64,28 @@ func BuildAPK(ctx context.Context, s *spec.Spec, sourceState llb.State, resolver
 		opts...,
 	)
 
-	// Default cmake build steps if none specified
-	srcDir := "/src"
-	if s.Build.SourceDir != "" && s.Build.SourceDir != "." {
-		srcDir = "/src/" + s.Build.SourceDir
-	}
-	steps := s.Build.Steps
-	if len(steps) == 0 {
-		steps = []string{
-			"mkdir -p /build && cd /build",
-			"cmake -DCMAKE_INSTALL_PREFIX=" + installDir + " " + srcDir,
-			"make -j$(nproc)",
-			"make install DESTDIR=/pkg",
-		}
+	if len(s.Build.Steps) == 0 {
+		return llb.Scratch(), errors.New("build.steps is required and must not be empty")
 	}
 
 	script := "set -e\nmkdir -p /pkg\n"
-	for _, s := range steps {
-		script += s + "\n"
+	for _, step := range s.Build.Steps {
+		script += step + "\n"
 	}
 
-	// Run cmake build; output in /pkg (directory in root so it's part of state)
+	// Run build steps; output in /pkg (directory in root so it's part of state)
 	builtRun := workerWithSrc.Run(
 		llb.Args([]string{"sh", "-c", script}),
 		llb.Dir("/"),
-		llb.WithCustomName("cmake build"),
+		llb.WithCustomName("run build steps"),
 	)
 	built := builtRun.Root()
 
 	// APKBUILD: package() copies from /input (we will mount built tree there)
 	pkgname := strings.ToLower(s.Name)
 	pkgver := s.Version
-	pkgrel := s.Epoch
-	if pkgrel == "" {
-		pkgrel = "0"
-	}
-	pkgdesc := s.Description
-	if pkgdesc == "" {
-		pkgdesc = s.Name
-	}
-	pkgurl := s.URL
-	if pkgurl == "" {
-		pkgurl = "https://example.com"
-	}
-	pkglicense := s.License
-	if pkglicense == "" {
-		pkglicense = "MIT"
-	}
+	pkgrel := fmt.Sprintf("%d", s.Epoch)
+	pkgdeps := strings.Join(s.Dependencies.Runtime, " ")
 
 	apkbuild := fmt.Sprintf(`# Contributor: cmake-apk
 pkgname="%s"
@@ -103,6 +95,7 @@ pkgdesc="%s"
 url="%s"
 arch="all"
 license="%s"
+depends="%s"
 options="!check !strip"
 source=""
 
@@ -114,7 +107,7 @@ package() {
 	mkdir -p "$pkgdir"
 	cp -a /input/pkg/* "$pkgdir"/ 2>/dev/null || cp -a /input/* "$pkgdir"/
 }
-`, pkgname, pkgver, pkgrel, pkgdesc, pkgurl, pkglicense)
+`, pkgname, pkgver, pkgrel, s.Description, s.URL, s.License, pkgdeps)
 
 	apkbuildState := llb.Scratch().File(
 		llb.Mkfile("APKBUILD", 0644, []byte(apkbuild)),

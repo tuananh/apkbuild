@@ -32,26 +32,45 @@ docker build -t tuananh/apkbuild -f Dockerfile .
 Our demo syntax would look like this
 
 ```yaml
-name: myapp
+name: hello
 version: "1.0.0"
-epoch: "0"           # used as pkgrel in APKBUILD
-url: https://example.com/myapp
+epoch: 0
+url: https://github.com/tuananh/apkbuild
 license: MIT
-description: Optional description
+description: Minimal package demo
+
+dependencies:
+  runtime: []
+
+environment:
+  contents:
+    repositories:
+      - https://dl-cdn.alpinelinux.org/alpine/edge/main
+    packages:
+      - alpine-baselayout-data
+      - busybox
+      - build-base
+      - scanelf
+      - ssl_client
+      - ca-certificates-bundle
+      - cmake
+      - make
+      - g++
+      - alpine-sdk
+      - doas
 
 sources:
   app:
-    context: {}      # use build context
+    context: {}
 
 build:
-  source_dir: hello  # subdir inside context (e.g. where CMakeLists.txt lives)
-  install_dir: /usr  # default; used as CMAKE_INSTALL_PREFIX
-  # Optional custom steps (default: cmake + make + make install DESTDIR=/pkg):
-  # steps:
-  #   - "mkdir -p /build && cd /build"
-  #   - "cmake -DCMAKE_INSTALL_PREFIX=/usr /src/hello"
-  #   - "make -j$(nproc)"
-  #   - "make install DESTDIR=/pkg"
+  source_dir: hello  # project lives in hello/ relative to build context
+  steps:
+    - mkdir -p /build && cd /build
+    - cmake -DCMAKE_INSTALL_PREFIX=/usr /src/hello
+    - make -j$(nproc)
+    - make install DESTDIR=/pkg
+
 ```
 
 ## Build the package

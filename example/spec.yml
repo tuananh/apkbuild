@@ -1,9 +1,29 @@
 name: hello
 version: "1.0.0"
-epoch: "0"
-url: https://example.com/hello
+epoch: 0
+url: https://github.com/tuananh/apkbuild
 license: MIT
-description: Minimal CMake APK demo
+description: Minimal package demo
+
+dependencies:
+  runtime: []
+
+environment:
+  contents:
+    repositories:
+      - https://dl-cdn.alpinelinux.org/alpine/edge/main
+    packages:
+      - alpine-baselayout-data
+      - busybox
+      - build-base
+      - scanelf
+      - ssl_client
+      - ca-certificates-bundle
+      - cmake
+      - make
+      - g++
+      - alpine-sdk
+      - doas
 
 sources:
   app:
@@ -11,3 +31,8 @@ sources:
 
 build:
   source_dir: hello  # project lives in hello/ relative to build context
+  steps:
+    - mkdir -p /build && cd /build
+    - cmake -DCMAKE_INSTALL_PREFIX=/usr /src/hello
+    - make -j$(nproc)
+    - make install DESTDIR=/pkg
