@@ -1,0 +1,25 @@
+name: Run autoconf configure
+
+inputs:
+  dir:
+    description: |
+      Directory containing the configure script (relative to /src).
+    default: "."
+  opts:
+    description: |
+      Extra options to pass to ./configure.
+    default: ""
+
+runs: |
+  cd /src/${{inputs.dir}}
+  if [ ! -f ./configure ] && [ -f ./configure.ac ]; then
+    autoreconf -vfi
+  fi
+  ./configure \
+    --prefix=/usr \
+    --sysconfdir=/etc \
+    --libdir=/usr/lib \
+    --mandir=/usr/share/man \
+    --infodir=/usr/share/info \
+    --localstatedir=/var \
+    ${{inputs.opts}}

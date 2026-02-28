@@ -3,6 +3,9 @@ package apk
 import (
 	"context"
 	"fmt"
+	"regexp"
+	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/moby/buildkit/client/llb"
@@ -25,6 +28,133 @@ func buildInstallCommand(s *spec.Spec) string {
 		b.WriteString("\n")
 	}
 	return b.String()
+}
+
+// validatePipelineStep checks that step.With conforms to the pipeline's input schema.
+func validatePipelineStep(def *PipelineDef, step *spec.PipelineStep, stepIndex int) error {
+	for key := range step.With {
+		if _, ok := def.Inputs[key]; !ok {
+			return fmt.Errorf("pipeline step %d (%s): unknown input %q (allowed: %s)",
+				stepIndex+1, step.Uses, key, sortedInputNames(def))
+		}
+	}
+	for name, input := range def.Inputs {
+		if !input.Required {
+			continue
+		}
+		raw, ok := step.With[name]
+		if !ok {
+			return fmt.Errorf("pipeline step %d (%s): required input %q is missing", stepIndex+1, step.Uses, name)
+		}
+		var s string
+		switch v := raw.(type) {
+		case string:
+			s = v
+		case bool:
+			s = strconv.FormatBool(v)
+		default:
+			s = fmt.Sprint(v)
+		}
+		if strings.TrimSpace(s) == "" {
+			return fmt.Errorf("pipeline step %d (%s): required input %q must not be empty", stepIndex+1, step.Uses, name)
+		}
+	}
+	return nil
+}
+
+func sortedInputNames(def *PipelineDef) string {
+	names := make([]string, 0, len(def.Inputs))
+	for k := range def.Inputs {
+		names = append(names, k)
+	}
+	sort.Strings(names)
+	return strings.Join(names, ", ")
+}
+
+// resolveInputs returns a map of input name -> string value (from step.With and pipeline defaults).
+func resolveInputs(def *PipelineDef, with map[string]interface{}, s *spec.Spec) map[string]string {
+	out := make(map[string]string)
+	for k, v := range def.Inputs {
+		out[k] = v.Default
+	}
+	for k, v := range with {
+		key := k
+		var val string
+		switch x := v.(type) {
+		case string:
+			val = x
+		case int:
+			val = strconv.Itoa(x)
+		case bool:
+			val = strconv.FormatBool(x)
+		default:
+			val = fmt.Sprint(x)
+		}
+		val = substitutePackage(val, s)
+		out[key] = val
+	}
+	return out
+}
+
+func substitutePackage(tpl string, s *spec.Spec) string {
+	tpl = strings.ReplaceAll(tpl, "${{package.name}}", s.Name)
+	tpl = strings.ReplaceAll(tpl, "${{package.version}}", s.Version)
+	return tpl
+}
+
+// reInputPlaceholder matches any ${{inputs.xxx}} left after known substitution (avoids bad shell substitution).
+var reInputPlaceholder = regexp.MustCompile(`\$\{\{inputs\.[^}]+\}\}`)
+
+// substituteScript replaces ${{inputs.xxx}}, ${{package.xxx}}, ${{targets.contextdir}} in script.
+func substituteScript(script string, inputs map[string]string, s *spec.Spec) string {
+	script = substitutePackage(script, s)
+	script = strings.ReplaceAll(script, "${{targets.contextdir}}", "/pkg")
+	for k, v := range inputs {
+		script = strings.ReplaceAll(script, "${{inputs."+k+"}}", v)
+	}
+	// Replace any remaining ${{inputs.xxx}} with empty string so shell never sees ${{ (bad substitution)
+	script = reInputPlaceholder.ReplaceAllString(script, "")
+	return script
+}
+
+// buildPipelineScript turns spec.Pipeline into a single shell script.
+func buildPipelineScript(s *spec.Spec) (string, error) {
+	if len(s.Pipeline) == 0 {
+		return "", errors.New("pipeline is required and must not be empty")
+	}
+	var b strings.Builder
+	b.WriteString("set -e\nmkdir -p /pkg\n")
+	for i, step := range s.Pipeline {
+		hasRun := strings.TrimSpace(step.Run) != ""
+		hasUses := step.Uses != ""
+		if hasRun && hasUses {
+			return "", fmt.Errorf("pipeline step %d: cannot set both 'uses' and 'run'", i+1)
+		}
+		if !hasRun && !hasUses {
+			return "", fmt.Errorf("pipeline step %d: must set either 'uses' or 'run'", i+1)
+		}
+		if hasRun {
+			b.WriteString(step.Run)
+			if !strings.HasSuffix(strings.TrimRight(step.Run, " \t"), "\n") {
+				b.WriteString("\n")
+			}
+			continue
+		}
+		def, err := getPipeline(step.Uses)
+		if err != nil {
+			return "", fmt.Errorf("pipeline step %d: %w", i+1, err)
+		}
+		if err := validatePipelineStep(def, &step, i); err != nil {
+			return "", err
+		}
+		inputs := resolveInputs(def, step.With, s)
+		resolved := substituteScript(def.Runs, inputs, s)
+		b.WriteString(resolved)
+		if !strings.HasSuffix(strings.TrimRight(resolved, " \t"), "\n") {
+			b.WriteString("\n")
+		}
+	}
+	return b.String(), nil
 }
 
 // BuildAPK produces an llb.State that contains built .apk package(s).
@@ -64,16 +194,12 @@ func BuildAPK(ctx context.Context, s *spec.Spec, sourceState llb.State, resolver
 		opts...,
 	)
 
-	if len(s.Build.Steps) == 0 {
-		return llb.Scratch(), errors.New("build.steps is required and must not be empty")
+	script, err := buildPipelineScript(s)
+	if err != nil {
+		return llb.Scratch(), err
 	}
 
-	script := "set -e\nmkdir -p /pkg\n"
-	for _, step := range s.Build.Steps {
-		script += step + "\n"
-	}
-
-	// Run build steps; output in /pkg (directory in root so it's part of state)
+	// Run pipeline; output in /pkg (directory in root so it's part of state)
 	builtRun := workerWithSrc.Run(
 		llb.Args([]string{"sh", "-c", script}),
 		llb.Dir("/"),

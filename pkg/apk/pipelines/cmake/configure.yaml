@@ -1,0 +1,20 @@
+name: Run CMake configure
+
+inputs:
+  dir:
+    description: |
+      Source directory containing CMakeLists.txt (relative to /src).
+    default: "."
+  build_dir:
+    description: |
+      Build directory to create (relative to /src).
+    default: "build"
+  opts:
+    description: |
+      Extra options to pass to cmake.
+    default: ""
+
+runs: |
+  cd /src
+  mkdir -p ${{inputs.build_dir}} && cd ${{inputs.build_dir}}
+  cmake -DCMAKE_INSTALL_PREFIX=/usr ${{inputs.opts}} ../${{inputs.dir}}

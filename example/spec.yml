@@ -1,9 +1,9 @@
 name: hello
 version: "1.0.0"
 epoch: 0
-url: https://github.com/tuananh/apkbuild
+url: https://github.com/tuananh/hello-package
 license: MIT
-description: Minimal package demo
+description: Minimal hello package
 
 dependencies:
   runtime: []
@@ -19,20 +19,20 @@ environment:
       - scanelf
       - ssl_client
       - ca-certificates-bundle
+      - wget
       - cmake
       - make
       - g++
       - alpine-sdk
-      - doas
+      - binutils
 
-sources:
-  app:
-    context: {}
-
-build:
-  source_dir: hello  # project lives in hello/ relative to build context
-  steps:
-    - mkdir -p /build && cd /build
-    - cmake -DCMAKE_INSTALL_PREFIX=/usr /src/hello
-    - make -j$(nproc)
-    - make install DESTDIR=/pkg
+pipeline:
+  - uses: fetch
+    with:
+      uri: https://github.com/tuananh/hello-package/archive/refs/heads/main.tar.gz
+      expected-none: true
+      strip-components: 1
+  - uses: cmake/configure
+  - uses: cmake/make
+  - uses: cmake/make-install
+  - uses: strip

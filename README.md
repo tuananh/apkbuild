@@ -19,8 +19,8 @@ I'm being lazy here and just assume CMake & hard-coding the APK packaging steps 
 ## Overview
 
 - **Custom frontend**: BuildKit gateway that reads a YAML spec from the build context (the “Dockerfile” input) and turns it into LLB.
-- **YAML spec**: name, version, epoch, url, license, description, sources (build context), and optional build steps / install dir / source subdir.
-- **Build backend**: Alpine image + `alpine-sdk`, `cmake`, `make`, `g++` → CMake build → `abuild` → `.apk` files.
+- **YAML spec** (melange-style): name, version, epoch, url, license, description, **environment** (repositories + packages), top-level **pipeline** (`uses:` or `run:`), optional sources / install_dir / source_dir.
+- **Build backend**: Alpine image + environment packages → pipeline (fetch / cmake or autoconf / strip) → `abuild` → `.apk` files.
 - **Output**: One or more `.apk` files at the result root (e.g. with `--output type=local,dest=./out`).
 
 ## Build the frontend image
@@ -29,15 +29,15 @@ I'm being lazy here and just assume CMake & hard-coding the APK packaging steps 
 docker build -t tuananh/apkbuild -f Dockerfile .
 ```
 
-Our demo syntax would look like this
+Our demo spec (melange-style, pipeline at top level) fetches [hello-package](https://github.com/tuananh/hello-package) and builds with CMake:
 
 ```yaml
 name: hello
 version: "1.0.0"
 epoch: 0
-url: https://github.com/tuananh/apkbuild
+url: https://github.com/tuananh/hello-package
 license: MIT
-description: Minimal package demo
+description: Minimal hello package
 
 dependencies:
   runtime: []
@@ -53,25 +53,26 @@ environment:
       - scanelf
       - ssl_client
       - ca-certificates-bundle
+      - wget
       - cmake
       - make
       - g++
       - alpine-sdk
-      - doas
+      - binutils
 
-sources:
-  app:
-    context: {}
-
-build:
-  source_dir: hello  # project lives in hello/ relative to build context
-  steps:
-    - mkdir -p /build && cd /build
-    - cmake -DCMAKE_INSTALL_PREFIX=/usr /src/hello
-    - make -j$(nproc)
-    - make install DESTDIR=/pkg
-
+pipeline:
+  - uses: fetch
+    with:
+      uri: https://github.com/tuananh/hello-package/archive/refs/heads/main.tar.gz
+      expected-none: true
+      strip-components: 1
+  - uses: cmake/configure
+  - uses: cmake/make
+  - uses: cmake/make-install
+  - uses: strip
 ```
+
+Pipeline steps: **`uses:`** (predefined) or **`run:`** (inline script). Supported `uses`: `fetch`, `cmake/configure`, `cmake/make`, `cmake/make-install`, `autoconf/configure`, `autoconf/make`, `autoconf/make-install`, `strip`. For fetch include `wget`; for CMake include `cmake`, `make`, `g++`; for autoconf include `autoconf`, `automake`, `make`; for strip include `binutils`, `scanelf`.
 
 ## Build the package
 
@@ -86,12 +87,12 @@ docker buildx build \
   .
 ```
 
-`BUILDKIT_SYNTAX` is the frontend syntax you built eawrlier.
+`BUILDKIT_SYNTAX` is the frontend image you built earlier.
 
 The `example/` directory contains:
 
-- `spec.yml` — spec with name, version, epoch, url, license, and `source_dir: hello`
-- `hello/` — minimal CMake C++ project (`CMakeLists.txt`, `main.cpp`). For demonstration purpose, I don't want to implement `git clone`
+- `spec.yml` — melange-style spec (hello-package: fetch from GitHub + cmake pipeline + strip)
+- `hello/` — optional minimal CMake project (for local build context if you use `sources` instead of fetch)
 
 After a successful build, `./out` contains the generated `.apk` file(s).
 
@@ -100,8 +101,8 @@ After a successful build, `./out` contains the generated `.apk` file(s).
 - **`cmd/frontend/`** — Gateway entrypoint (runs the BuildKit frontend).
 - **`frontend/`** — Custom frontend: spec loading and gateway `BuildFunc` (reads YAML, gets context, calls APK build).
 - **`pkg/spec/`** — YAML spec struct and `Load()`.
-- **`pkg/apk/`** — Build backend: LLB for Alpine + cmake + abuild and `.apk` output.
-- **`example/`** — Sample spec and `hello` CMake project.
+- **`pkg/apk/`** — Build backend: LLB for Alpine + pipeline scripts + abuild and `.apk` output.
+- **`example/`** — Sample spec (hello-package) and optional `hello/` CMake project.
 
 ## Requirements
 

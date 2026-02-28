@@ -1,0 +1,14 @@
+name: Run autoconf make
+
+inputs:
+  dir:
+    description: |
+      Directory containing the Makefile (relative to /src).
+    default: "."
+  opts:
+    description: |
+      Extra options to pass to make.
+    default: ""
+
+runs: |
+  make -C "/src/${{inputs.dir}}" -j$(nproc) V=1 ${{inputs.opts}}

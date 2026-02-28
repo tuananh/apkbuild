@@ -1,0 +1,15 @@
+name: Run autoconf make install
+
+inputs:
+  dir:
+    description: |
+      Directory containing the Makefile (relative to /src).
+    default: "."
+  opts:
+    description: |
+      Extra options to pass to make install.
+    default: ""
+
+runs: |
+  make -C "/src/${{inputs.dir}}" install DESTDIR="${{targets.contextdir}}" V=1 ${{inputs.opts}}
+  find "${{targets.contextdir}}" -name '*.la' -print -exec rm {} \;

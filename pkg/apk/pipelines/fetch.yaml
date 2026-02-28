@@ -1,0 +1,48 @@
+name: Fetch and extract
+
+inputs:
+  uri:
+    description: |
+      The URI to fetch (tarball or archive).
+    required: true
+  expected-sha256:
+    description: |
+      Expected SHA256 of the downloaded artifact. Provide one of expected-sha256, expected-sha512, or expected-none.
+  expected-sha512:
+    description: |
+      Expected SHA512 of the downloaded artifact. Provide one of expected-sha256, expected-sha512, or expected-none.
+  expected-none:
+    description: |
+      If set, skip checksum verification (e.g. for dynamic URLs like GitHub archive).
+  strip-components:
+    description: |
+      Number of path components to strip when extracting (e.g. 1 for a single top-level directory).
+    default: "1"
+
+runs: |
+  need_sum=1
+  if [ -n "${{inputs.expected-none}}" ]; then need_sum=0; fi
+  if [ "$need_sum" = 1 ] && [ -z "${{inputs.expected-sha256}}" ] && [ -z "${{inputs.expected-sha512}}" ]; then
+    echo "One of expected-sha256, expected-sha512, or expected-none is required"
+    exit 1
+  fi
+  bn=$(basename "${{inputs.uri}}")
+  mkdir -p /src && cd /src
+  wget -T30 -q --show-progress -O "$bn" "${{inputs.uri}}"
+  if [ "$need_sum" = 1 ]; then
+    if [ -n "${{inputs.expected-sha256}}" ]; then
+      sum=$(sha256sum "$bn" | awk '{print $1}')
+      if [ "${{inputs.expected-sha256}}" != "$sum" ]; then
+        echo "sha256 mismatch: expected ${{inputs.expected-sha256}}, got $sum"
+        exit 1
+      fi
+    else
+      sum=$(sha512sum "$bn" | awk '{print $1}')
+      if [ "${{inputs.expected-sha512}}" != "$sum" ]; then
+        echo "sha512 mismatch"
+        exit 1
+      fi
+    fi
+  fi
+  tar -x --strip-components=${{inputs.strip-components}} --no-same-owner -C . -f "$bn"
+  rm -f "$bn"

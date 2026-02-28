@@ -1,0 +1,14 @@
+name: Run CMake make
+
+inputs:
+  build_dir:
+    description: |
+      Build directory (relative to /src) where cmake was run.
+    default: "build"
+  opts:
+    description: |
+      Extra options to pass to make.
+    default: ""
+
+runs: |
+  make -C "/src/${{inputs.build_dir}}" -j$(nproc) V=1 ${{inputs.opts}}

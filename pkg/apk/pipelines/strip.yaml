@@ -1,0 +1,15 @@
+name: Strip binaries
+
+inputs:
+  opts:
+    description: |
+      Options to pass to strip (e.g. -g for debug strip).
+    default: "-g"
+
+runs: |
+  cd "${{targets.contextdir}}"
+  scanelf --recursive --nobanner --osabi --etype "ET_DYN,ET_EXEC" . \
+    | while read type osabi filename; do
+    [ "$osabi" != "STANDALONE" ] || continue
+    strip ${{inputs.opts}} "${filename}" 2>/dev/null || true
+  done

@@ -1,0 +1,14 @@
+name: Run CMake make install
+
+inputs:
+  build_dir:
+    description: |
+      Build directory (relative to /src) where cmake was run.
+    default: "build"
+  opts:
+    description: |
+      Extra options to pass to make install.
+    default: ""
+
+runs: |
+  make -C "/src/${{inputs.build_dir}}" install DESTDIR="${{targets.contextdir}}" V=1 ${{inputs.opts}}
