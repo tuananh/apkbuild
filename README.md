@@ -29,7 +29,7 @@ I'm being lazy here and just assume CMake & hard-coding the APK packaging steps 
 docker build -t tuananh/apkbuild -f Dockerfile .
 ```
 
-Our demo package fetches [hello-package](https://github.com/tuananh/hello-package) and builds with CMake:
+Our example fetches [hello-package](https://github.com/tuananh/hello-package) and builds with CMake:
 
 ```yaml
 name: hello
