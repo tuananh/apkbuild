@@ -12,8 +12,6 @@ To do that, we will need to:
 
 For this demo, **APK packaging uses `abuild`** internally (Alpine’s standard tooling). The same idea could be implemented with something like **apk-go** or another packager; the frontend/backend split stays the same.
 
-I'm being lazy here and just assume CMake & hard-coding the APK packaging steps but you get the idea.
-
 ---
 
 ## Overview
