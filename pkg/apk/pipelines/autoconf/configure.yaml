@@ -1,5 +1,12 @@
 name: Run autoconf configure
 
+needs:
+  packages:
+    - autoconf
+    - automake
+    - libtool
+    - build-base
+
 inputs:
   dir:
     description: |

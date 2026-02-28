@@ -1,5 +1,9 @@
 name: Run CMake make
 
+needs:
+  packages:
+    - build-base
+
 inputs:
   build_dir:
     description: |

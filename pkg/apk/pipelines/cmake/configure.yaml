@@ -1,5 +1,10 @@
 name: Run CMake configure
 
+needs:
+  packages:
+    - cmake
+    - build-base
+
 inputs:
   dir:
     description: |

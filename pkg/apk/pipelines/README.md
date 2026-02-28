@@ -5,6 +5,8 @@ Each YAML file defines one pipeline that can be referenced with `uses: <name>` i
 **Schema:**
 
 - `name` (optional): Human-readable description.
+- `needs` (optional): Dependencies required in the build environment:
+  - **`needs.packages`**: List of Alpine package names (e.g. `wget`, `cmake`, `build-base`). The build backend collects these from every pipeline step used in a spec, deduplicates them, merges with `environment.contents.packages`, and installs all of them before running the pipeline. You do not need to list these in the spec’s environment unless you want to pin versions or add repos.
 - `inputs` (optional): Map of input name → schema (melange-style). The spec’s `with:` is validated against this:
   - **Short form**: `name: "default"` — optional input with default value.
   - **Long form**: `name: { description?: string, default?: string, required?: bool }` — human-readable description, optional default, or required (must be provided in `with:`).

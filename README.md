@@ -47,18 +47,8 @@ environment:
     repositories:
       - https://dl-cdn.alpinelinux.org/alpine/edge/main
     packages:
-      - alpine-baselayout-data
-      - busybox
-      - build-base
-      - scanelf
-      - ssl_client
-      - ca-certificates-bundle
-      - wget
-      - cmake
-      - make
-      - g++
       - alpine-sdk
-      - binutils
+      - ca-certificates-bundle
 
 pipeline:
   - uses: fetch
@@ -72,7 +62,7 @@ pipeline:
   - uses: strip
 ```
 
-Pipeline steps: **`uses:`** (predefined) or **`run:`** (inline script). Supported `uses`: `fetch`, `cmake/configure`, `cmake/make`, `cmake/make-install`, `autoconf/configure`, `autoconf/make`, `autoconf/make-install`, `strip`. For fetch include `wget`; for CMake include `cmake`, `make`, `g++`; for autoconf include `autoconf`, `automake`, `make`; for strip include `binutils`, `scanelf`.
+Pipeline steps: **`uses:`** (predefined) or **`run:`** (inline script). Supported `uses`: `fetch`, `cmake/configure`, `cmake/make`, `cmake/make-install`, `autoconf/configure`, `autoconf/make`, `autoconf/make-install`, `strip`. Each pipeline declares its own **`needs.packages`** (e.g. fetch needs `wget`); the build backend collects and installs these automatically (deduplicated with `environment.contents.packages`). You only need to list extra env packages (e.g. `alpine-sdk` for abuild, `ca-certificates-bundle` for HTTPS fetch).
 
 ## Build the package
 

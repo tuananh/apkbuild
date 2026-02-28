@@ -1,5 +1,10 @@
 name: Strip binaries
 
+needs:
+  packages:
+    - pax-utils
+    - binutils
+
 inputs:
   opts:
     description: |

@@ -40,9 +40,15 @@ func (i *InputDef) UnmarshalYAML(unmarshal func(interface{}) error) error {
 	return nil
 }
 
+// PipelineNeeds declares what a pipeline needs (e.g. packages to install in the build environment).
+type PipelineNeeds struct {
+	Packages []string `yaml:"packages,omitempty"`
+}
+
 // PipelineDef is the structure of a pipeline YAML file.
 type PipelineDef struct {
 	Name   string             `yaml:"name,omitempty"`
+	Needs  PipelineNeeds      `yaml:"needs,omitempty"`
 	Inputs map[string]InputDef `yaml:"inputs,omitempty"` // input name -> schema (default, required)
 	Runs   string             `yaml:"runs,omitempty"`
 }

@@ -13,18 +13,8 @@ environment:
     repositories:
       - https://dl-cdn.alpinelinux.org/alpine/edge/main
     packages:
-      - alpine-baselayout-data
-      - busybox
-      - build-base
-      - scanelf
-      - ssl_client
-      - ca-certificates-bundle
-      - wget
-      - cmake
-      - make
-      - g++
       - alpine-sdk
-      - binutils
+      - ca-certificates-bundle
 
 pipeline:
   - uses: fetch

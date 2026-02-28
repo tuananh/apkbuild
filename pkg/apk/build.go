@@ -15,19 +15,60 @@ import (
 
 const alpineImage = "alpine:3.23"
 
-// buildInstallCommand returns a shell script that configures apk repos (if any) and installs packages from the spec.
-func buildInstallCommand(s *spec.Spec) string {
+// collectPipelinePackages returns a deduplicated list of packages required by pipeline steps (from each pipeline's needs.packages).
+func collectPipelinePackages(s *spec.Spec) ([]string, error) {
+	seen := make(map[string]struct{})
+	for _, step := range s.Pipeline {
+		if step.Uses == "" {
+			continue
+		}
+		def, err := getPipeline(step.Uses)
+		if err != nil {
+			return nil, err
+		}
+		for _, pkg := range def.Needs.Packages {
+			seen[pkg] = struct{}{}
+		}
+	}
+	list := make([]string, 0, len(seen))
+	for pkg := range seen {
+		list = append(list, pkg)
+	}
+	sort.Strings(list)
+	return list, nil
+}
+
+// buildInstallCommand returns a shell script that configures apk repos (if any) and installs packages from the spec plus all packages needed by pipelines (deduplicated).
+func buildInstallCommand(s *spec.Spec) (string, error) {
+	pipelinePkgs, err := collectPipelinePackages(s)
+	if err != nil {
+		return "", err
+	}
+	seen := make(map[string]struct{})
+	var all []string
+	for _, p := range s.Environment.Contents.Packages {
+		if _, ok := seen[p]; !ok {
+			seen[p] = struct{}{}
+			all = append(all, p)
+		}
+	}
+	for _, p := range pipelinePkgs {
+		if _, ok := seen[p]; !ok {
+			seen[p] = struct{}{}
+			all = append(all, p)
+		}
+	}
 	var b strings.Builder
 	b.WriteString("set -e\n")
 	for _, repo := range s.Environment.Contents.Repositories {
 		b.WriteString(fmt.Sprintf("echo %q >> /etc/apk/repositories\n", repo))
 	}
-	if len(s.Environment.Contents.Packages) > 0 {
+	if len(all) > 0 {
 		b.WriteString("apk add --no-cache ")
-		b.WriteString(strings.Join(s.Environment.Contents.Packages, " "))
+		b.WriteString(strings.Join(all, " "))
 		b.WriteString("\n")
 	}
-	return b.String()
+	return b.String(), nil
 }
 
 // validatePipelineStep checks that step.With conforms to the pipeline's input schema.
@@ -176,12 +217,15 @@ func BuildAPK(ctx context.Context, s *spec.Spec, sourceState llb.State, resolver
 		return llb.Scratch(), errors.New("spec license is required")
 	}
 
-	// Worker: Alpine + environment packages from spec (repositories + packages)
+	// Worker: Alpine + environment packages from spec (repositories + packages) + pipeline needs (deduplicated)
 	workerImage := llb.Image(alpineImage, llb.WithCustomName("apk worker base"))
 	if resolver != nil {
 		workerImage = llb.Image(alpineImage, llb.WithMetaResolver(resolver), llb.WithCustomName("apk worker base"))
 	}
-	installCmd := buildInstallCommand(s)
+	installCmd, err := buildInstallCommand(s)
+	if err != nil {
+		return llb.Scratch(), err
+	}
 	worker := workerImage.
 		Run(
 			llb.Args([]string{"sh", "-c", installCmd}),
