@@ -62,7 +62,7 @@ pipeline:
   - uses: strip
 ```
 
-Pipeline steps: **`uses:`** (predefined) or **`run:`** (inline script). Supported `uses`: `fetch`, `cmake/configure`, `cmake/make`, `cmake/make-install`, `autoconf/configure`, `autoconf/make`, `autoconf/make-install`, `strip`. Each pipeline declares its own **`needs.packages`** (e.g. fetch needs `wget`); the build backend collects and installs these automatically (deduplicated with `environment.contents.packages`). You only need to list extra env packages (e.g. `alpine-sdk` for abuild, `ca-certificates-bundle` for HTTPS fetch).
+Pipeline steps: **`uses:`** (predefined) or **`run:`** (inline script). Supported `uses`: `fetch`, `cmake/configure`, `cmake/make`, `cmake/make-install`, `autoconf/configure`, `autoconf/make`, `autoconf/make-install`, `strip`. Each pipeline defines **`needs.packages`** in its YAML; the backend collects these from all steps used in your spec, deduplicates, merges with `environment.contents.packages`, and installs them. In the spec, list only extra env packages (e.g. `alpine-sdk` for abuild, `ca-certificates-bundle` for HTTPS fetch).
 
 ## Build the package
 
@@ -82,7 +82,6 @@ docker buildx build \
 The `example/` directory contains:
 
 - `spec.yml` — melange-style spec (hello-package: fetch from GitHub + cmake pipeline + strip)
-- `hello/` — optional minimal CMake project (for local build context if you use `sources` instead of fetch)
 
 After a successful build, `./out` contains the generated `.apk` file(s).
 
@@ -92,7 +91,7 @@ After a successful build, `./out` contains the generated `.apk` file(s).
 - **`frontend/`** — Custom frontend: spec loading and gateway `BuildFunc` (reads YAML, gets context, calls APK build).
 - **`pkg/spec/`** — YAML spec struct and `Load()`.
 - **`pkg/apk/`** — Build backend: LLB for Alpine + pipeline scripts + abuild and `.apk` output.
-- **`example/`** — Sample spec (hello-package) and optional `hello/` CMake project.
+- **`example/`** — Sample spec (hello-package, fetched from GitHub).
 
 ## Requirements
 
