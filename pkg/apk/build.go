@@ -113,13 +113,14 @@ func sortedInputNames(def *PipelineDef) string {
 }
 
 // resolveInputs returns a map of input name -> string value (from step.With and pipeline defaults).
+// Input values are substituted with package/targets/context vars so with: can use e.g. ${{package.name}}.
 func resolveInputs(def *PipelineDef, with map[string]interface{}, s *spec.Spec) map[string]string {
+	base := NewSubstitutionMap(s)
 	out := make(map[string]string)
 	for k, v := range def.Inputs {
-		out[k] = v.Default
+		out[k] = Substitute(v.Default, base)
 	}
 	for k, v := range with {
-		key := k
 		var val string
 		switch x := v.(type) {
 		case string:
@@ -131,28 +132,21 @@ func resolveInputs(def *PipelineDef, with map[string]interface{}, s *spec.Spec) 
 		default:
 			val = fmt.Sprint(x)
 		}
-		val = substitutePackage(val, s)
-		out[key] = val
+		out[k] = Substitute(val, base)
 	}
 	return out
-}
-
-func substitutePackage(tpl string, s *spec.Spec) string {
-	tpl = strings.ReplaceAll(tpl, "${{package.name}}", s.Name)
-	tpl = strings.ReplaceAll(tpl, "${{package.version}}", s.Version)
-	return tpl
 }
 
 // reInputPlaceholder matches any ${{inputs.xxx}} left after known substitution (avoids bad shell substitution).
 var reInputPlaceholder = regexp.MustCompile(`\$\{\{inputs\.[^}]+\}\}`)
 
-// substituteScript replaces ${{inputs.xxx}}, ${{package.xxx}}, ${{targets.contextdir}} in script.
+// substituteScript replaces all Melange-style variables in script: ${{package.xxx}}, ${{targets.xxx}}, ${{context.name}}, ${{inputs.xxx}}.
 func substituteScript(script string, inputs map[string]string, s *spec.Spec) string {
-	script = substitutePackage(script, s)
-	script = strings.ReplaceAll(script, "${{targets.contextdir}}", "/pkg")
+	m := NewSubstitutionMap(s)
 	for k, v := range inputs {
-		script = strings.ReplaceAll(script, "${{inputs."+k+"}}", v)
+		m["${{inputs."+k+"}}"] = v
 	}
+	script = Substitute(script, m)
 	// Replace any remaining ${{inputs.xxx}} with empty string so shell never sees ${{ (bad substitution)
 	script = reInputPlaceholder.ReplaceAllString(script, "")
 	return script

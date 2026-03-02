@@ -11,6 +11,22 @@ Each YAML file defines one pipeline that can be referenced with `uses: <name>` i
   - **Short form**: `name: "default"` — optional input with default value.
   - **Long form**: `name: { description?: string, default?: string, required?: bool }` — human-readable description, optional default, or required (must be provided in `with:`).
   - Only inputs declared here are allowed in `with:`; unknown keys are rejected.
-- `runs` (required): Shell script body. Supports `${{inputs.xxx}}`, `${{package.name}}`, `${{package.version}}`, `${{targets.contextdir}}` (/pkg).
+- `runs` (required): Shell script body. Supports variable substitution (Melange-style, see below).
 
 Builds run from `/`; source/context is at `/src`, install destination is `/pkg`.
+
+**Variable substitution** (usable in `runs` and in step `with:` values):
+
+| Variable | Description |
+|----------|-------------|
+| `${{package.name}}` | Package name from spec |
+| `${{package.version}}` | Package version |
+| `${{package.full-version}}` | Version + epoch, e.g. `1.0.0-r0` |
+| `${{package.epoch}}` | Epoch number |
+| `${{package.description}}` | Package description |
+| `${{package.srcdir}}` | Source directory (default `/src`, or `/src/<source_dir>` if `build.source_dir` is set) |
+| `${{targets.outdir}}` | Output root (`/pkg`) |
+| `${{targets.destdir}}` | Install destination (`/pkg`) |
+| `${{targets.contextdir}}` | Same as destdir (`/pkg`) |
+| `${{context.name}}` | Package name (same as `package.name`) |
+| `${{inputs.<name>}}` | Value of pipeline input from step `with:` (or default) |
