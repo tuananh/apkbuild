@@ -256,61 +256,60 @@ func BuildAPK(ctx context.Context, s *spec.Spec, sourceState llb.State, resolver
 	builtRun := workerWithSrc.Run(pipelineRunOpts...)
 	built := builtRun.Root()
 
-	// Create .apk only from the pipeline output path (TargetsOutdir): control segment (.PKGINFO) + data segment (tar of that dir only).
-	// Copy only TargetsOutdir from built so we never package /src or other build artifacts.
+	// Create .apk: mount pipeline output at TargetsOutdir, generate .PKGINFO there, then build control/data tarballs.
 	pkgOnly := llb.Scratch().File(
-		llb.Copy(built, TargetsOutdir, ".", &llb.CopyInfo{CreateDestPath: true}),
+		llb.Copy(built, TargetsOutdir+"/.", ".", &llb.CopyInfo{CreateDestPath: true}),
 		opts...,
 	)
+	apkOutDir := "/workspace/apk-out"
 	pkgname := strings.ToLower(s.Name)
 	pkgver := s.Version
 	pkgrel := fmt.Sprintf("%d", s.Epoch)
-	// Escape for shell: description and url may contain single quotes
 	descEsc := strings.ReplaceAll(s.Description, "'", "'\"'\"'")
 	urlEsc := strings.ReplaceAll(s.URL, "'", "'\"'\"'")
 	licenseEsc := strings.ReplaceAll(s.License, "'", "'\"'\"'")
-	var depLines string
+	// Single .PKGINFO body; shell expands $pkgname etc. when heredoc runs
+	pkginfoBody := "# Generated\n" +
+		"pkgname = $pkgname\n" +
+		"pkgver = ${pkgver}-${pkgrel}\n" +
+		"pkgdesc = $pkgdesc\n" +
+		"url = $url\n" +
+		"builddate = $(date +%s)\n" +
+		"arch = noarch\n" +
+		"license = $license\n"
 	for _, d := range s.Dependencies.Runtime {
-		depLines += fmt.Sprintf("echo \"depend = %s\" >> /ctrl/.PKGINFO\n", d)
+		pkginfoBody += "depend = " + d + "\n"
 	}
-	// Mount point for the pipeline output; we only package this directory.
 	pkgDataDir := TargetsOutdir
-	// Dir on run's root fs for the .apk (mount contents are not in the run snapshot).
-	apkOutDir := "/workspace/apk-out"
-	// Build control + data tarballs (APK format), then concatenate into .apk.
 	createAPKScript := "set -e\n" +
-		"mkdir -p /tmp/apk /ctrl " + apkOutDir + "\n" +
+		"mkdir -p /tmp/apk " + apkOutDir + "\n" +
 		fmt.Sprintf("pkgname='%s'\n", pkgname) +
 		fmt.Sprintf("pkgver='%s'\n", pkgver) +
 		fmt.Sprintf("pkgrel='%s'\n", pkgrel) +
 		fmt.Sprintf("pkgdesc='%s'\n", descEsc) +
 		fmt.Sprintf("url='%s'\n", urlEsc) +
 		fmt.Sprintf("license='%s'\n", licenseEsc) +
-		"echo \"# Generated\" > /ctrl/.PKGINFO\n" +
-		"echo \"pkgname = $pkgname\" >> /ctrl/.PKGINFO\n" +
-		"echo \"pkgver = ${pkgver}-${pkgrel}\" >> /ctrl/.PKGINFO\n" +
-		"echo \"pkgdesc = $pkgdesc\" >> /ctrl/.PKGINFO\n" +
-		"echo \"url = $url\" >> /ctrl/.PKGINFO\n" +
-		"echo \"builddate = $(date +%s)\" >> /ctrl/.PKGINFO\n" +
-		"echo \"arch = noarch\" >> /ctrl/.PKGINFO\n" +
-		"echo \"license = $license\" >> /ctrl/.PKGINFO\n" +
-		depLines +
-		fmt.Sprintf("tar -C %s -czf /tmp/apk/data.tar.gz .\n", pkgDataDir) +
-		"tar -C /ctrl -czf /tmp/apk/control.tar.gz .\n" +
-		fmt.Sprintf("cat /tmp/apk/control.tar.gz /tmp/apk/data.tar.gz > \"%s/${pkgname}-${pkgver}-${pkgrel}.apk\"\n", apkOutDir)
+		fmt.Sprintf("cat > \"%s/.PKGINFO\" << ENDPKGINFO\n%sENDPKGINFO\n", TargetsOutdir, pkginfoBody) +
+		// data_src: real tree root (strip nested build-out if present). control = .PKGINFO only; data = tree excluding .PKGINFO
+		fmt.Sprintf("data_src=\"%s\"; [ -d \"%s/build-out\" ] && data_src=\"%s/build-out\"; ", pkgDataDir, pkgDataDir, pkgDataDir) +
+		fmt.Sprintf("tar -C \"%s\" -czf /tmp/apk/control.tar.gz .PKGINFO; ", TargetsOutdir) +
+		"tar -C \"$data_src\" -czf /tmp/apk/data.tar.gz --exclude .PKGINFO .\n" +
+		fmt.Sprintf("apkfile=\"%s/${pkgname}-${pkgver}-r${pkgrel}.apk\"\n", apkOutDir) +
+		"cat /tmp/apk/control.tar.gz /tmp/apk/data.tar.gz > \"$apkfile\"\n"
 	createAPKRunOpts := []llb.RunOption{
 		llb.Args([]string{"sh", "-c", createAPKScript}),
-		llb.AddMount(pkgDataDir, pkgOnly, llb.Readonly),
+		llb.AddMount(pkgDataDir, pkgOnly), // writable so we can write .PKGINFO into build-out
 		llb.WithCustomName("create apk"),
 	}
 	for _, o := range opts {
 		createAPKRunOpts = append(createAPKRunOpts, o)
 	}
-	pkgRun := worker.Run(createAPKRunOpts...).Root()
+	pkgRun := built.Run(createAPKRunOpts...).Root()
 
-	// Copy the .apk from the run's root fs (apkOutDir); mount contents are not in the snapshot.
+	// Export only the .apk (data segment = pkgOnly = pipeline output).
+	apkName := fmt.Sprintf("%s-%s-r%s.apk", pkgname, pkgver, pkgrel)
 	result := llb.Scratch().File(
-		llb.Copy(pkgRun, apkOutDir, "/"),
+		llb.Copy(pkgRun, apkOutDir+"/"+apkName, "/"),
 		opts...,
 	)
 	return result, nil
