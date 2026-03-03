@@ -7,9 +7,11 @@ frontend:
 
 example:
 	cd example && docker buildx build \
+		--no-cache \
 		-f spec.yml \
 		--build-arg BUILDKIT_SYNTAX=$(IMAGE) \
 		--output type=local,dest=./out \
+		--progress=plain \
 		.
 
 all: example

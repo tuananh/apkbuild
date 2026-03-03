@@ -3,6 +3,7 @@ package frontend
 import (
 	"context"
 
+	"github.com/moby/buildkit/client/llb"
 	"github.com/moby/buildkit/frontend/dockerui"
 	gwclient "github.com/moby/buildkit/frontend/gateway/client"
 	"github.com/pkg/errors"
@@ -34,8 +35,14 @@ func BuildFunc(ctx context.Context, client gwclient.Client) (*gwclient.Result, e
 		return nil, errors.Wrap(err, "build context")
 	}
 
+	// Forward --no-cache from buildx so BuildKit ignores cache for all steps
+	var buildOpts []llb.ConstraintsOpt
+	if dc.IsNoCache("") {
+		buildOpts = append(buildOpts, llb.IgnoreCache)
+	}
+
 	// Build APK: produces state with .apk in /out (nil resolver: worker resolves images during solve)
-	st, err := apk.BuildAPK(ctx, spec, *bctx, nil)
+	st, err := apk.BuildAPK(ctx, spec, *bctx, nil, buildOpts...)
 	if err != nil {
 		return nil, err
 	}

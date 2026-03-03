@@ -2,6 +2,7 @@ package apk
 
 import (
 	"fmt"
+	"maps"
 	"strings"
 
 	"github.com/tuananh/apkbuild/pkg/spec"
@@ -18,22 +19,27 @@ const (
 	SubstitutionPackageSrcdir      = "${{package.srcdir}}"
 	SubstitutionTargetsOutdir      = "${{targets.outdir}}"
 	SubstitutionTargetsDestdir     = "${{targets.destdir}}"
-	SubstitutionTargetsContextdir   = "${{targets.contextdir}}"
+	SubstitutionTargetsContextdir  = "${{targets.contextdir}}"
 	SubstitutionContextName        = "${{context.name}}"
 )
 
 // Install destination and source directory used during the build.
 const (
-	TargetsOutdir    = "/pkg"
-	TargetsDestdir   = "/pkg"
-	TargetsContextdir = "/pkg"
-	PackageSrcdir    = "/src"
+	TargetsOutdir     = "/workspace/build-out"
+	TargetsDestdir    = "/workspace/build-out"
+	TargetsContextdir = "/workspace/build-out"
+	PackageSrcdir     = "/workspace/build-src"
 )
 
-// NewSubstitutionMap returns a map of variable name -> value for the given spec.
+// SubstitutionMap holds variable name -> value for pipeline substitution (melange-style).
+// See: https://github.com/chainguard-dev/melange/blob/main/pkg/build/pipeline.go
+type SubstitutionMap struct {
+	Substitutions map[string]string
+}
+
+// NewSubstitutionMap returns a SubstitutionMap for the given spec (melange-style behavior).
 // Used to substitute ${{package.xxx}}, ${{targets.xxx}}, ${{context.name}} in pipeline runs.
-// Callers should add ${{inputs.<name>}} entries and then call Substitute on script/values.
-func NewSubstitutionMap(s *spec.Spec) map[string]string {
+func NewSubstitutionMap(s *spec.Spec) (*SubstitutionMap, error) {
 	fullVersion := s.Version
 	if s.Epoch > 0 {
 		fullVersion = fmt.Sprintf("%s-r%d", s.Version, s.Epoch)
@@ -42,7 +48,7 @@ func NewSubstitutionMap(s *spec.Spec) map[string]string {
 	if s.Build.SourceDir != "" {
 		srcdir = strings.TrimSuffix(PackageSrcdir+"/"+strings.TrimPrefix(s.Build.SourceDir, "/"), "/")
 	}
-	return map[string]string{
+	nw := map[string]string{
 		SubstitutionPackageName:        s.Name,
 		SubstitutionPackageVersion:     s.Version,
 		SubstitutionPackageFullVersion: fullVersion,
@@ -54,6 +60,36 @@ func NewSubstitutionMap(s *spec.Spec) map[string]string {
 		SubstitutionTargetsContextdir:  TargetsContextdir,
 		SubstitutionContextName:        s.Name,
 	}
+	return &SubstitutionMap{Substitutions: nw}, nil
+}
+
+// MutateWith merges "with" into a clone of the substitution map (as ${{inputs.<key>}}),
+// then performs recursive substitution on all values so they can reference each other.
+// Returns the resulting map. Mirrors melange's SubstitutionMap.MutateWith.
+func (sm *SubstitutionMap) MutateWith(with map[string]string) (map[string]string, error) {
+	nw := maps.Clone(sm.Substitutions)
+	for k, v := range with {
+		if strings.HasPrefix(k, "${{") {
+			nw[k] = v
+		} else {
+			nw["${{inputs."+k+"}}"] = v
+		}
+	}
+	// Recursive substitution until fixed point (melange MutateStringFromMap behavior).
+	for i := 0; i < 32; i++ {
+		changed := false
+		for k, v := range nw {
+			replaced := Substitute(v, nw)
+			if replaced != v {
+				changed = true
+				nw[k] = replaced
+			}
+		}
+		if !changed {
+			break
+		}
+	}
+	return nw, nil
 }
 
 // Substitute replaces all ${{...}} variables in s with values from m.

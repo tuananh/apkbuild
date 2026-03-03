@@ -3,6 +3,7 @@ package apk
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"regexp"
 	"sort"
 	"strconv"
@@ -112,13 +113,16 @@ func sortedInputNames(def *PipelineDef) string {
 	return strings.Join(names, ", ")
 }
 
-// resolveInputs returns a map of input name -> string value (from step.With and pipeline defaults).
-// Input values are substituted with package/targets/context vars so with: can use e.g. ${{package.name}}.
-func resolveInputs(def *PipelineDef, with map[string]interface{}, s *spec.Spec) map[string]string {
-	base := NewSubstitutionMap(s)
-	out := make(map[string]string)
+// resolveInputs returns the full substitution map (package/targets/context + inputs) with recursive substitution applied.
+// Uses SubstitutionMap.MutateWith (melange-style) so input values can reference ${{package.name}} etc.
+func resolveInputs(def *PipelineDef, with map[string]interface{}, s *spec.Spec) (map[string]string, error) {
+	sm, err := NewSubstitutionMap(s)
+	if err != nil {
+		return nil, err
+	}
+	withMap := make(map[string]string)
 	for k, v := range def.Inputs {
-		out[k] = Substitute(v.Default, base)
+		withMap[k] = Substitute(v.Default, sm.Substitutions)
 	}
 	for k, v := range with {
 		var val string
@@ -132,21 +136,17 @@ func resolveInputs(def *PipelineDef, with map[string]interface{}, s *spec.Spec) 
 		default:
 			val = fmt.Sprint(x)
 		}
-		out[k] = Substitute(val, base)
+		withMap[k] = Substitute(val, sm.Substitutions)
 	}
-	return out
+	return sm.MutateWith(withMap)
 }
 
 // reInputPlaceholder matches any ${{inputs.xxx}} left after known substitution (avoids bad shell substitution).
 var reInputPlaceholder = regexp.MustCompile(`\$\{\{inputs\.[^}]+\}\}`)
 
-// substituteScript replaces all Melange-style variables in script: ${{package.xxx}}, ${{targets.xxx}}, ${{context.name}}, ${{inputs.xxx}}.
-func substituteScript(script string, inputs map[string]string, s *spec.Spec) string {
-	m := NewSubstitutionMap(s)
-	for k, v := range inputs {
-		m["${{inputs."+k+"}}"] = v
-	}
-	script = Substitute(script, m)
+// substituteScript replaces all Melange-style variables in script using the full substitution map.
+func substituteScript(script string, inputs map[string]string) string {
+	script = Substitute(script, inputs)
 	// Replace any remaining ${{inputs.xxx}} with empty string so shell never sees ${{ (bad substitution)
 	script = reInputPlaceholder.ReplaceAllString(script, "")
 	return script
@@ -182,8 +182,12 @@ func buildPipelineScript(s *spec.Spec) (string, error) {
 		if err := validatePipelineStep(def, &step, i); err != nil {
 			return "", err
 		}
-		inputs := resolveInputs(def, step.With, s)
-		resolved := substituteScript(def.Runs, inputs, s)
+		inputs, err := resolveInputs(def, step.With, s)
+		if err != nil {
+			return "", err
+		}
+		slog.Info("pipeline step config", "step", i+1, "uses", step.Uses, "config", inputs)
+		resolved := substituteScript(def.Runs, inputs)
 		b.WriteString(resolved)
 		if !strings.HasSuffix(strings.TrimRight(resolved, " \t"), "\n") {
 			b.WriteString("\n")
@@ -193,7 +197,7 @@ func buildPipelineScript(s *spec.Spec) (string, error) {
 }
 
 // BuildAPK produces an llb.State that contains built .apk package(s).
-// It uses an Alpine-based environment: installs build deps, runs cmake, then abuild.
+// It uses an Alpine-based environment: installs build deps, runs the pipeline, then creates the .apk via tar (control + data segments).
 func BuildAPK(ctx context.Context, s *spec.Spec, sourceState llb.State, resolver llb.ImageMetaResolver, opts ...llb.ConstraintsOpt) (llb.State, error) {
 	if s.Name == "" {
 		return llb.Scratch(), errors.New("spec name is required")
@@ -220,11 +224,14 @@ func BuildAPK(ctx context.Context, s *spec.Spec, sourceState llb.State, resolver
 	if err != nil {
 		return llb.Scratch(), err
 	}
-	worker := workerImage.
-		Run(
-			llb.Args([]string{"sh", "-c", installCmd}),
-			llb.WithCustomName("install build deps"),
-		).Root()
+	workerRunOpts := []llb.RunOption{
+		llb.Args([]string{"sh", "-c", installCmd}),
+		llb.WithCustomName("install build deps"),
+	}
+	for _, o := range opts {
+		workerRunOpts = append(workerRunOpts, o)
+	}
+	worker := workerImage.Run(workerRunOpts...).Root()
 
 	// Mount source at /src
 	workerWithSrc := worker.File(
@@ -238,68 +245,72 @@ func BuildAPK(ctx context.Context, s *spec.Spec, sourceState llb.State, resolver
 	}
 
 	// Run pipeline; output in /pkg (directory in root so it's part of state)
-	builtRun := workerWithSrc.Run(
+	pipelineRunOpts := []llb.RunOption{
 		llb.Args([]string{"sh", "-c", script}),
 		llb.Dir("/"),
 		llb.WithCustomName("run build steps"),
-	)
+	}
+	for _, o := range opts {
+		pipelineRunOpts = append(pipelineRunOpts, o)
+	}
+	builtRun := workerWithSrc.Run(pipelineRunOpts...)
 	built := builtRun.Root()
 
-	// APKBUILD: package() copies from /input (we will mount built tree there)
+	// Create .apk only from the pipeline output path (TargetsOutdir): control segment (.PKGINFO) + data segment (tar of that dir only).
+	// Copy only TargetsOutdir from built so we never package /src or other build artifacts.
+	pkgOnly := llb.Scratch().File(
+		llb.Copy(built, TargetsOutdir, ".", &llb.CopyInfo{CreateDestPath: true}),
+		opts...,
+	)
 	pkgname := strings.ToLower(s.Name)
 	pkgver := s.Version
 	pkgrel := fmt.Sprintf("%d", s.Epoch)
-	pkgdeps := strings.Join(s.Dependencies.Runtime, " ")
+	// Escape for shell: description and url may contain single quotes
+	descEsc := strings.ReplaceAll(s.Description, "'", "'\"'\"'")
+	urlEsc := strings.ReplaceAll(s.URL, "'", "'\"'\"'")
+	licenseEsc := strings.ReplaceAll(s.License, "'", "'\"'\"'")
+	var depLines string
+	for _, d := range s.Dependencies.Runtime {
+		depLines += fmt.Sprintf("echo \"depend = %s\" >> /ctrl/.PKGINFO\n", d)
+	}
+	// Mount point for the pipeline output; we only package this directory.
+	pkgDataDir := TargetsOutdir
+	// Dir on run's root fs for the .apk (mount contents are not in the run snapshot).
+	apkOutDir := "/workspace/apk-out"
+	// Build control + data tarballs (APK format), then concatenate into .apk.
+	createAPKScript := "set -e\n" +
+		"mkdir -p /tmp/apk /ctrl " + apkOutDir + "\n" +
+		fmt.Sprintf("pkgname='%s'\n", pkgname) +
+		fmt.Sprintf("pkgver='%s'\n", pkgver) +
+		fmt.Sprintf("pkgrel='%s'\n", pkgrel) +
+		fmt.Sprintf("pkgdesc='%s'\n", descEsc) +
+		fmt.Sprintf("url='%s'\n", urlEsc) +
+		fmt.Sprintf("license='%s'\n", licenseEsc) +
+		"echo \"# Generated\" > /ctrl/.PKGINFO\n" +
+		"echo \"pkgname = $pkgname\" >> /ctrl/.PKGINFO\n" +
+		"echo \"pkgver = ${pkgver}-${pkgrel}\" >> /ctrl/.PKGINFO\n" +
+		"echo \"pkgdesc = $pkgdesc\" >> /ctrl/.PKGINFO\n" +
+		"echo \"url = $url\" >> /ctrl/.PKGINFO\n" +
+		"echo \"builddate = $(date +%s)\" >> /ctrl/.PKGINFO\n" +
+		"echo \"arch = noarch\" >> /ctrl/.PKGINFO\n" +
+		"echo \"license = $license\" >> /ctrl/.PKGINFO\n" +
+		depLines +
+		fmt.Sprintf("tar -C %s -czf /tmp/apk/data.tar.gz .\n", pkgDataDir) +
+		"tar -C /ctrl -czf /tmp/apk/control.tar.gz .\n" +
+		fmt.Sprintf("cat /tmp/apk/control.tar.gz /tmp/apk/data.tar.gz > \"%s/${pkgname}-${pkgver}-${pkgrel}.apk\"\n", apkOutDir)
+	createAPKRunOpts := []llb.RunOption{
+		llb.Args([]string{"sh", "-c", createAPKScript}),
+		llb.AddMount(pkgDataDir, pkgOnly, llb.Readonly),
+		llb.WithCustomName("create apk"),
+	}
+	for _, o := range opts {
+		createAPKRunOpts = append(createAPKRunOpts, o)
+	}
+	pkgRun := worker.Run(createAPKRunOpts...).Root()
 
-	apkbuild := fmt.Sprintf(`# Contributor: cmake-apk
-pkgname="%s"
-pkgver="%s"
-pkgrel="%s"
-pkgdesc="%s"
-url="%s"
-arch="all"
-license="%s"
-depends="%s"
-options="!check !strip"
-source=""
-
-build() {
-	true
-}
-
-package() {
-	mkdir -p "$pkgdir"
-	cp -a /input/pkg/* "$pkgdir"/ 2>/dev/null || cp -a /input/* "$pkgdir"/
-}
-`, pkgname, pkgver, pkgrel, s.Description, s.URL, s.License, pkgdeps)
-
-	apkbuildState := llb.Scratch().File(
-		llb.Mkfile("APKBUILD", 0644, []byte(apkbuild)),
-		opts...,
-	)
-
-	// /work: APKBUILD + mount built at /input for package()
-	workDir := llb.Scratch().
-		File(llb.Copy(apkbuildState, "APKBUILD", "APKBUILD"), opts...)
-
-	// Create builder user and add to abuild group (abuild requires user to be in group abuild).
-	abuildScript := "set -e\n" +
-		"adduser -D builder\n" +
-		"addgroup builder abuild\n" +
-		"mkdir -p /out\n" +
-		"chown -R builder:builder /work /out\n" +
-		"su builder -s /bin/sh -c 'abuild-keygen -an'\n" +
-		"cp /home/builder/.abuild/*.rsa.pub /etc/apk/keys/\n" +
-		"su builder -s /bin/sh -c 'cd /work && abuild -r && find ~/packages -name \"*.apk\" -exec cp {} /out \\;'\n"
-	abuildRun := worker.Run(
-		llb.Args([]string{"sh", "-c", abuildScript}),
-		llb.AddMount("/work", workDir),
-		llb.AddMount("/input", built, llb.Readonly),
-		llb.WithCustomName("abuild package"),
-	).Root()
-
+	// Copy the .apk from the run's root fs (apkOutDir); mount contents are not in the snapshot.
 	result := llb.Scratch().File(
-		llb.Copy(abuildRun, "/out", "/"),
+		llb.Copy(pkgRun, apkOutDir, "/"),
 		opts...,
 	)
 	return result, nil

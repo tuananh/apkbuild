@@ -10,7 +10,7 @@ To do that, we will need to:
 
 2. **Implement a build backend** — the logic that actually builds what you want. Here that means: CMake build plus packaging into APK (Alpine package format). The backend could do anything (other package formats, other toolchains, etc.).
 
-For this demo, **APK packaging uses `abuild`** internally (Alpine’s standard tooling). The same idea could be implemented with something like **apk-go** or another packager; the frontend/backend split stays the same.
+For this demo, **APK packaging creates the `.apk` directly** from the pipeline output (control segment + data tarball via `abuild-tar`), without the full abuild workflow. The frontend/backend split stays the same.
 
 ---
 
@@ -18,7 +18,7 @@ For this demo, **APK packaging uses `abuild`** internally (Alpine’s standard t
 
 - **Custom frontend**: BuildKit gateway that reads a YAML spec from the build context (the “Dockerfile” input) and turns it into LLB.
 - **YAML spec** (melange-style): name, version, epoch, url, license, description, **environment** (repositories + packages), top-level **pipeline** (`uses:` or `run:`), optional sources / install_dir / source_dir.
-- **Build backend**: Alpine image + environment packages → pipeline (fetch / cmake or autoconf / strip) → `abuild` → `.apk` files.
+- **Build backend**: Alpine image + environment packages → pipeline (fetch / cmake or autoconf / strip) → create `.apk` via tar (control + data) → `.apk` files.
 - **Output**: One or more `.apk` files at the result root (e.g. with `--output type=local,dest=./out`).
 
 ## Build the frontend image
@@ -60,7 +60,7 @@ pipeline:
   - uses: strip
 ```
 
-Pipeline steps: **`uses:`** (predefined) or **`run:`** (inline script). Supported `uses`: `fetch`, `cmake/configure`, `cmake/make`, `cmake/make-install`, `autoconf/configure`, `autoconf/make`, `autoconf/make-install`, `strip`. Each pipeline defines **`needs.packages`** in its YAML; the backend collects these from all steps used in your spec, deduplicates, merges with `environment.contents.packages`, and installs them. In the spec, list only extra env packages (e.g. `alpine-sdk` for abuild, `ca-certificates-bundle` for HTTPS fetch).
+Pipeline steps: **`uses:`** (predefined) or **`run:`** (inline script). Supported `uses`: `fetch`, `cmake/configure`, `cmake/make`, `cmake/make-install`, `autoconf/configure`, `autoconf/make`, `autoconf/make-install`, `strip`. Each pipeline defines **`needs.packages`** in its YAML; the backend collects these from all steps used in your spec, deduplicates, merges with `environment.contents.packages`, and installs them. In the spec, list only extra env packages (e.g. `ca-certificates-bundle` for HTTPS fetch). The final APK is created from the pipeline output using alpine-sdk (`abuild-tar`) in a separate step.
 
 ## Build the package
 
@@ -83,12 +83,22 @@ The `example/` directory contains:
 
 After a successful build, `./out` contains the generated `.apk` file(s).
 
+**Listing package contents**: An APK file is two concatenated gzip tarballs (control then data). `tar -tf foo.apk` only reads the first stream, so you see only the control segment (e.g. `.PKGINFO`). To list the actual files (data segment) without installing, skip the first stream by its compressed size and run tar on the rest:
+
+```bash
+# First column from gzip -l is compressed size (bytes to skip)
+skip=$(gzip -l hello-1.0.0-0.apk | awk 'NR==2 {print $1}')
+tail -c +$((skip + 1)) hello-1.0.0-0.apk | tar -tzf -
+```
+
+Or install the package and run `apk info -L hello`.
+
 ## Layout
 
 - **`cmd/frontend/`** — Gateway entrypoint (runs the BuildKit frontend).
 - **`frontend/`** — Custom frontend: spec loading and gateway `BuildFunc` (reads YAML, gets context, calls APK build).
 - **`pkg/spec/`** — YAML spec struct and `Load()`.
-- **`pkg/apk/`** — Build backend: LLB for Alpine + pipeline scripts + abuild and `.apk` output.
+- **`pkg/apk/`** — Build backend: LLB for Alpine + pipeline scripts + tar-based `.apk` creation.
 - **`example/`** — Sample spec (hello-package, fetched from GitHub).
 
 ## Requirements
