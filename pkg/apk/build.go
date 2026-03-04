@@ -282,20 +282,19 @@ func BuildAPK(ctx context.Context, s *spec.Spec, sourceState llb.State, resolver
 	}
 	pkgDataDir := TargetsOutdir
 	createAPKScript := "set -e\n" +
-		"mkdir -p /tmp/apk " + apkOutDir + "\n" +
+		fmt.Sprintf("echo '=== /workspace/build-out ==='; ls -laR \"%s\"\n", TargetsOutdir) +
+		"mkdir -p " + apkOutDir + "\n" +
 		fmt.Sprintf("pkgname='%s'\n", pkgname) +
 		fmt.Sprintf("pkgver='%s'\n", pkgver) +
 		fmt.Sprintf("pkgrel='%s'\n", pkgrel) +
 		fmt.Sprintf("pkgdesc='%s'\n", descEsc) +
 		fmt.Sprintf("url='%s'\n", urlEsc) +
 		fmt.Sprintf("license='%s'\n", licenseEsc) +
-		fmt.Sprintf("cat > \"%s/.PKGINFO\" << ENDPKGINFO\n%sENDPKGINFO\n", TargetsOutdir, pkginfoBody) +
-		// data_src: real tree root (strip nested build-out if present). control = .PKGINFO only; data = tree excluding .PKGINFO
+		// data_src: directory to archive (strip nested build-out if present); write .PKGINFO there so it's in the tarball
 		fmt.Sprintf("data_src=\"%s\"; [ -d \"%s/build-out\" ] && data_src=\"%s/build-out\"; ", pkgDataDir, pkgDataDir, pkgDataDir) +
-		fmt.Sprintf("tar -C \"%s\" -czf /tmp/apk/control.tar.gz .PKGINFO; ", TargetsOutdir) +
-		"tar -C \"$data_src\" -czf /tmp/apk/data.tar.gz --exclude .PKGINFO .\n" +
-		fmt.Sprintf("apkfile=\"%s/${pkgname}-${pkgver}-r${pkgrel}.apk\"\n", apkOutDir) +
-		"cat /tmp/apk/control.tar.gz /tmp/apk/data.tar.gz > \"$apkfile\"\n"
+		fmt.Sprintf("cat > \"$data_src/.PKGINFO\" << ENDPKGINFO\n%sENDPKGINFO\n", pkginfoBody) +
+		fmt.Sprintf("apkfile=\"%s/${pkgname}-${pkgver}-r${pkgrel}.apk\"; ", apkOutDir) +
+		"tar -C \"$data_src\" -cvzf \"$apkfile\" .\n"
 	createAPKRunOpts := []llb.RunOption{
 		llb.Args([]string{"sh", "-c", createAPKScript}),
 		llb.AddMount(pkgDataDir, pkgOnly), // writable so we can write .PKGINFO into build-out
