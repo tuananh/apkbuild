@@ -282,6 +282,7 @@ func BuildAPK(ctx context.Context, s *spec.Spec, sourceState llb.State, resolver
 	}
 	pkgDataDir := TargetsOutdir
 	createAPKScript := "set -e\n" +
+		"apk add --no-cache abuild >/dev/null\n" +
 		fmt.Sprintf("echo '=== /workspace/build-out ==='; ls -laR \"%s\"\n", TargetsOutdir) +
 		"mkdir -p " + apkOutDir + "\n" +
 		fmt.Sprintf("pkgname='%s'\n", pkgname) +
@@ -290,11 +291,16 @@ func BuildAPK(ctx context.Context, s *spec.Spec, sourceState llb.State, resolver
 		fmt.Sprintf("pkgdesc='%s'\n", descEsc) +
 		fmt.Sprintf("url='%s'\n", urlEsc) +
 		fmt.Sprintf("license='%s'\n", licenseEsc) +
-		// data_src: directory to archive (strip nested build-out if present); write .PKGINFO there so it's in the tarball
+		// data_src: directory to archive (strip nested build-out if present); write .PKGINFO there
 		fmt.Sprintf("data_src=\"%s\"; [ -d \"%s/build-out\" ] && data_src=\"%s/build-out\"; ", pkgDataDir, pkgDataDir, pkgDataDir) +
 		fmt.Sprintf("cat > \"$data_src/.PKGINFO\" << ENDPKGINFO\n%sENDPKGINFO\n", pkginfoBody) +
 		fmt.Sprintf("apkfile=\"%s/${pkgname}-${pkgver}-r${pkgrel}.apk\"; ", apkOutDir) +
-		"tar -C \"$data_src\" -cvzf \"$apkfile\" .\n"
+		// 1. Control stream: .PKGINFO only (--cut removes tar EOF so streams can be concatenated)
+		"tar -C \"$data_src\" -c .PKGINFO | abuild-tar --cut | gzip -9 > /tmp/control.tar.gz\n" +
+		// 2. Data stream: package contents (no . or .PKGINFO); --xattrs and * match Alpine abuild style; --hash adds PAX SHA1 for apk file list
+		"( cd \"$data_src\" && tar -c --xattrs --exclude .PKGINFO * ) | abuild-tar --hash | abuild-tar --cut | gzip -9 > /tmp/data.tar.gz\n" +
+		// 3. Concatenate into final .apk
+		"cat /tmp/control.tar.gz /tmp/data.tar.gz > \"$apkfile\"\n"
 	createAPKRunOpts := []llb.RunOption{
 		llb.Args([]string{"sh", "-c", createAPKScript}),
 		llb.AddMount(pkgDataDir, pkgOnly), // writable so we can write .PKGINFO into build-out
