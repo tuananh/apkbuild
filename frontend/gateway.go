@@ -154,7 +154,12 @@ func copyRefToDir(ctx context.Context, ref gwclient.Reference, refPath, destDir 
 		if err := os.MkdirAll(filepath.Dir(dstPath), 0o755); err != nil {
 			return err
 		}
-		if err := os.WriteFile(dstPath, data, 0o644); err != nil {
+		// Preserve mode from ref (e.g. 0755 for binaries from make install)
+		mode := e.Mode & uint32(os.ModePerm)
+		if mode == 0 {
+			mode = 0o644
+		}
+		if err := os.WriteFile(dstPath, data, os.FileMode(mode)); err != nil {
 			return err
 		}
 	}
