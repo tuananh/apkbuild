@@ -38,14 +38,14 @@ license: MIT
 description: Minimal hello package
 
 dependencies:
-  runtime: []
+  runtime:
+    - libstdc++
 
 environment:
   contents:
     repositories:
       - https://dl-cdn.alpinelinux.org/alpine/edge/main
     packages:
-      - alpine-sdk
       - ca-certificates-bundle
 
 pipeline:
