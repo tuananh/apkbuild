@@ -6,7 +6,8 @@ license: MIT
 description: Minimal hello package
 
 dependencies:
-  runtime: []
+  runtime:
+    - libstdc++
 
 environment:
   contents:
