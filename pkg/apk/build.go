@@ -256,66 +256,7 @@ func BuildAPK(ctx context.Context, s *spec.Spec, sourceState llb.State, resolver
 	builtRun := workerWithSrc.Run(pipelineRunOpts...)
 	built := builtRun.Root()
 
-	// Create .apk: mount pipeline output at TargetsOutdir, generate .PKGINFO there, then build control/data tarballs.
-	pkgOnly := llb.Scratch().File(
-		llb.Copy(built, TargetsOutdir+"/.", ".", &llb.CopyInfo{CreateDestPath: true}),
-		opts...,
-	)
-	apkOutDir := "/workspace/apk-out"
-	pkgname := strings.ToLower(s.Name)
-	pkgver := s.Version
-	pkgrel := fmt.Sprintf("%d", s.Epoch)
-	descEsc := strings.ReplaceAll(s.Description, "'", "'\"'\"'")
-	urlEsc := strings.ReplaceAll(s.URL, "'", "'\"'\"'")
-	licenseEsc := strings.ReplaceAll(s.License, "'", "'\"'\"'")
-	// Single .PKGINFO body; shell expands $pkgname etc. when heredoc runs
-	pkginfoBody := "# Generated\n" +
-		"pkgname = $pkgname\n" +
-		"pkgver = ${pkgver}-${pkgrel}\n" +
-		"pkgdesc = $pkgdesc\n" +
-		"url = $url\n" +
-		"builddate = $(date +%s)\n" +
-		"arch = noarch\n" +
-		"license = $license\n"
-	for _, d := range s.Dependencies.Runtime {
-		pkginfoBody += "depend = " + d + "\n"
-	}
-	pkgDataDir := TargetsOutdir
-	createAPKScript := "set -e\n" +
-		"apk add --no-cache abuild >/dev/null\n" +
-		fmt.Sprintf("echo '=== /workspace/build-out ==='; ls -laR \"%s\"\n", TargetsOutdir) +
-		"mkdir -p " + apkOutDir + "\n" +
-		fmt.Sprintf("pkgname='%s'\n", pkgname) +
-		fmt.Sprintf("pkgver='%s'\n", pkgver) +
-		fmt.Sprintf("pkgrel='%s'\n", pkgrel) +
-		fmt.Sprintf("pkgdesc='%s'\n", descEsc) +
-		fmt.Sprintf("url='%s'\n", urlEsc) +
-		fmt.Sprintf("license='%s'\n", licenseEsc) +
-		// data_src: directory to archive (strip nested build-out if present); write .PKGINFO there
-		fmt.Sprintf("data_src=\"%s\"; [ -d \"%s/build-out\" ] && data_src=\"%s/build-out\"; ", pkgDataDir, pkgDataDir, pkgDataDir) +
-		fmt.Sprintf("cat > \"$data_src/.PKGINFO\" << ENDPKGINFO\n%sENDPKGINFO\n", pkginfoBody) +
-		fmt.Sprintf("apkfile=\"%s/${pkgname}-${pkgver}-r${pkgrel}.apk\"; ", apkOutDir) +
-		// 1. Control stream: .PKGINFO only (--cut removes tar EOF so streams can be concatenated)
-		"tar -C \"$data_src\" -c .PKGINFO | abuild-tar --cut | gzip -9 > /tmp/control.tar.gz\n" +
-		// 2. Data stream: package contents (no . or .PKGINFO); --xattrs and * match Alpine abuild style; --hash adds PAX SHA1 for apk file list
-		"( cd \"$data_src\" && tar -c --xattrs --exclude .PKGINFO * ) | abuild-tar --hash | abuild-tar --cut | gzip -9 > /tmp/data.tar.gz\n" +
-		// 3. Concatenate into final .apk
-		"cat /tmp/control.tar.gz /tmp/data.tar.gz > \"$apkfile\"\n"
-	createAPKRunOpts := []llb.RunOption{
-		llb.Args([]string{"sh", "-c", createAPKScript}),
-		llb.AddMount(pkgDataDir, pkgOnly), // writable so we can write .PKGINFO into build-out
-		llb.WithCustomName("create apk"),
-	}
-	for _, o := range opts {
-		createAPKRunOpts = append(createAPKRunOpts, o)
-	}
-	pkgRun := built.Run(createAPKRunOpts...).Root()
-
-	// Export only the .apk (data segment = pkgOnly = pipeline output).
-	apkName := fmt.Sprintf("%s-%s-r%s.apk", pkgname, pkgver, pkgrel)
-	result := llb.Scratch().File(
-		llb.Copy(pkgRun, apkOutDir+"/"+apkName, "/"),
-		opts...,
-	)
-	return result, nil
+	// Assembly is done in Go outside the container (see frontend: solve → export ref → AssembleAPK → solve write-apk).
+	// Return only the built directory state.
+	return built, nil
 }
